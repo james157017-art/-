@@ -1,0 +1,863 @@
+/**
+ * ====================================
+ * 급여 자동화 시스템 v3.0 (최적화)
+ * ====================================
+ **/
+
+// ==================== 설정 ====================
+const CONFIG = {
+  SLACK_WEBHOOK_URL: 'YOUR_SLACK_WEBHOOK_URL',
+  HR_EMAIL: 'YOUR_EMAIL',
+  SHEET_NAMES: ['직원정보', '급여계산', '전월급여', '설정값', '이상치로그', '대시보드'],
+  COLORS: {
+    PRIMARY: '#4285f4',
+    SUCCESS: '#34a853',
+    WARNING: '#fbbc04',
+    ERROR: '#ea4335',
+    INFO: '#00acc1',
+    ACCENT: '#9c27b0'
+  }
+};
+
+// ==================== 1. 초기 설정 ====================
+function onOpen() {
+  SpreadsheetApp.getUi()
+    .createMenu('💼 급여관리')
+    .addItem('🔧 초기설정', 'initialSetup')
+    .addItem('💰 급여계산', 'executePayrollWorkflow')
+    .addItem('📧 급여명세서 발송', 'sendPayslips')
+    .addItem('🔄 대시보드 새로고침', 'refreshDashboard')
+    .addSeparator()
+    .addItem('💾 전월 데이터 저장', 'saveLastMonthData')
+    .addItem('⏰ 월간 자동실행 설정', 'setupMonthlyTrigger')
+    .addToUi();
+  
+  showToast('급여관리 시스템이 로드되었습니다.', '✅ 준비완료', 3);
+}
+
+function initialSetup() {
+  showToast('초기 설정을 시작합니다...', '⏳ 실행 중', -1);
+  
+  try {
+    createAllSheets();
+    setupSheetHeaders();
+    setupSettingsData();
+    setupDashboard();
+    finalizeSetup();
+    
+    showToast(
+      '모든 시트가 생성되었습니다.\n직원정보 시트에 데이터를 입력한 후 "급여계산"을 실행하세요.',
+      '✅ 초기설정 완료',
+      5
+    );
+  } catch (error) {
+    handleError('초기설정', error);
+  }
+}
+
+function createAllSheets() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  CONFIG.SHEET_NAMES.forEach(name => {
+    if (!ss.getSheetByName(name)) {
+      ss.insertSheet(name);
+      Logger.log(`${name} 시트 생성 완료`);
+    }
+  });
+}
+
+function setupSheetHeaders() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  
+  // 직원정보 시트
+  setupEmployeeSheet(ss.getSheetByName('직원정보'));
+  
+  // 급여계산 시트
+  setupPayrollSheet(ss.getSheetByName('급여계산'));
+  
+  // 전월급여 시트
+  setupLastMonthSheet(ss.getSheetByName('전월급여'));
+  
+  // 이상치로그 시트
+  setupOutlierSheet(ss.getSheetByName('이상치로그'));
+}
+
+function setupEmployeeSheet(sheet) {
+  sheet.clear();
+  const headers = ['사번', '이메일', '이름', '부서', '직급', '기본급', '입사일', '부양가족수', '계좌번호', '야근시간'];
+  
+  setSheetHeader(sheet, headers, CONFIG.COLORS.PRIMARY);
+  sheet.setColumnWidth(2, 200); // 이메일 열
+  
+  // 데이터 유효성 검사
+  const lastRow = 100;
+  setNumberValidation(sheet, 2, 10, lastRow); // 야근시간
+  setNumberValidation(sheet, 2, 8, lastRow);  // 부양가족수
+}
+
+function setupPayrollSheet(sheet) {
+  sheet.clear();
+  const headers = [
+    '사번', '이메일', '이름', '부서', '직급', '기본급', '식대', '교통비', '야근수당', 
+    '세전급여', '국민연금', '건강보험', '장기요양', '고용보험', '소득세', 
+    '총공제', '실수령액', '전월대비', '증감률(%)', '상태', '비고', '처리일시', '일할계산'
+  ];
+  
+  setSheetHeader(sheet, headers, CONFIG.COLORS.SUCCESS);
+  sheet.setColumnWidth(2, 200); // 이메일 열
+}
+
+function setupLastMonthSheet(sheet) {
+  sheet.clear();
+  const headers = ['이름', '실수령액', '저장일시'];
+  setSheetHeader(sheet, headers, CONFIG.COLORS.WARNING);
+}
+
+function setupOutlierSheet(sheet) {
+  sheet.clear();
+  const headers = ['탐지일시', '사번', '이름', '부서', '실수령액', '상태', '사유', '전월대비'];
+  setSheetHeader(sheet, headers, CONFIG.COLORS.ERROR);
+}
+
+function setupSettingsData() {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('설정값');
+  sheet.clear();
+  
+  const headers = ['항목', '값', '비고'];
+  const data = [
+    ['식대', 200000, '월 고정'],
+    ['교통비', 200000, '월 고정'],
+    ['야근수당_시간당', 15000, ''],
+    ['국민연금_요율', 0.045, '4.5%'],
+    ['건강보험_요율', 0.03545, '3.545%'],
+    ['장기요양_요율', 0.1295, '건강보험의 12.95%'],
+    ['고용보험_요율', 0.009, '0.9%'],
+    ['이상치_기준_배율', 0.08, '전월 대비 8% 변동'],
+    ['최저실수령액_기준', 2156880, '']
+  ];
+  
+  setSheetHeader(sheet, headers, CONFIG.COLORS.ACCENT);
+  sheet.getRange(2, 1, data.length, 3).setValues(data);
+  sheet.setColumnWidths(1, 3, 200);
+}
+
+function setupDashboard() {
+  const dashboard = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('대시보드');
+  dashboard.clear();
+  
+  // 제목
+  const titleRange = dashboard.getRange('A1:F1');
+  titleRange.merge()
+    .setValue('📊 급여 계산 대시보드')
+    .setFontSize(18)
+    .setFontWeight('bold')
+    .setBackground(CONFIG.COLORS.PRIMARY)
+    .setFontColor('#ffffff');
+  
+  // 기본 통계
+  setupDashboardSection(dashboard, 'A3', '📈 기본 통계', CONFIG.COLORS.SUCCESS, [
+    ['총 직원 수', "=COUNTA(급여계산!A2:A)"],
+    ['총 지급액', '=SUM(급여계산!Q2:Q)'],
+    ['평균 실수령액', '=AVERAGE(급여계산!Q2:Q)'],
+    ['최고 실수령액', '=MAX(급여계산!Q2:Q)'],
+    ['최저 실수령액', '=MIN(급여계산!Q2:Q)']
+  ]);
+  
+  // 이상치 현황
+  setupDashboardSection(dashboard, 'A10', '🚨 이상치 현황', CONFIG.COLORS.ERROR, [
+    ['경고 건수', '=COUNTIF(급여계산!T2:T,"🚨 경고")'],
+    ['주의 건수', '=COUNTIF(급여계산!T2:T,"⚠️ 주의")'],
+    ['정상 건수', '=COUNTIF(급여계산!T2:T,"✅ 정상")']
+  ]);
+  
+  // 상위/하위 5명
+  setupDashboardRankings(dashboard);
+  
+  // 부서별 평균
+  setupDashboardDepartment(dashboard);
+  
+  // 열 너비 조정
+  [1, 4].forEach(col => dashboard.setColumnWidth(col, 180));
+  [2, 5, 6].forEach(col => dashboard.setColumnWidth(col, 150));
+}
+
+function setupDashboardSection(sheet, startCell, title, color, data) {
+  const row = parseInt(startCell.match(/\d+/)[0]);
+  const col = startCell.charCodeAt(0) - 64;
+  
+  sheet.getRange(row, col, 1, 2)
+    .merge()
+    .setValue(title)
+    .setFontWeight('bold')
+    .setBackground(color)
+    .setFontColor('#ffffff');
+  
+  sheet.getRange(row + 1, col, data.length, 2).setValues(data);
+  sheet.getRange(row + 1, col + 1, data.length, 1).setNumberFormat('#,##0');
+}
+
+function setupDashboardRankings(sheet) {
+  // 상위 5명
+  sheet.getRange('D3:F3')
+    .merge()
+    .setValue('🏆 상위 5명 (실수령액)')
+    .setFontWeight('bold')
+    .setBackground(CONFIG.COLORS.WARNING);
+  
+  sheet.getRange('D4:F4')
+    .setValues([['이름', '부서', '실수령액']])
+    .setFontWeight('bold')
+    .setBackground('#fce5cd');
+  
+  sheet.getRange('D5')
+    .setFormula('=QUERY(급여계산!C2:Q, "SELECT C, D, Q WHERE Q > 0 ORDER BY Q DESC LIMIT 5", 0)');
+  
+  // 하위 5명
+  sheet.getRange('D10:F10')
+    .merge()
+    .setValue('📉 하위 5명 (실수령액)')
+    .setFontWeight('bold')
+    .setBackground(CONFIG.COLORS.ACCENT)
+    .setFontColor('#ffffff');
+  
+  sheet.getRange('D11:F11')
+    .setValues([['이름', '부서', '실수령액']])
+    .setFontWeight('bold')
+    .setBackground('#d9d2e9');
+  
+  sheet.getRange('D12')
+    .setFormula('=QUERY(급여계산!C2:Q, "SELECT C, D, Q WHERE Q > 0 ORDER BY Q ASC LIMIT 5", 0)');
+}
+
+function setupDashboardDepartment(sheet) {
+  sheet.getRange('A16:B16')
+    .merge()
+    .setValue('🏢 부서별 평균 실수령액')
+    .setFontWeight('bold')
+    .setBackground(CONFIG.COLORS.INFO)
+    .setFontColor('#ffffff');
+  
+  sheet.getRange('A17:B17')
+    .setValues([['부서', '평균 실수령액']])
+    .setFontWeight('bold')
+    .setBackground('#b2dfdb');
+  
+  sheet.getRange('A18')
+    .setFormula('=QUERY(급여계산!D2:Q, "SELECT D, AVG(Q) WHERE Q > 0 GROUP BY D ORDER BY AVG(Q) DESC LABEL D \'부서\', AVG(Q) \'평균 실수령액\'", 1)');
+}
+
+function finalizeSetup() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  CONFIG.SHEET_NAMES.forEach(name => {
+    const sheet = ss.getSheetByName(name);
+    if (sheet) sheet.setFrozenRows(1);
+  });
+  Logger.log('초기설정 완료');
+}
+
+// ==================== 2. 급여계산 워크플로우 ====================
+function executePayrollWorkflow() {
+  try {
+    const steps = [
+      { name: '급여계산', func: executePayroll, message: '급여를 계산하고 있습니다...' },
+      { name: '이상치탐지', func: detectOutliers, message: '이상치를 탐지하고 있습니다...' },
+      { name: 'Slack알림', func: sendSlackNotification, message: 'Slack 알림을 전송하고 있습니다...', conditional: true },
+      { name: '명세서발송', func: sendPayslips, message: '급여명세서를 발송하고 있습니다...' }
+    ];
+    
+    let calculationResult, outliers, emailResult;
+    
+    for (let i = 0; i < steps.length; i++) {
+      const step = steps[i];
+      showToast(`${i + 1}/${steps.length} 단계: ${step.message}`, '⏳ 실행 중', -1);
+      
+      if (step.name === '급여계산') {
+        calculationResult = step.func();
+        if (!calculationResult.success) throw new Error(calculationResult.message);
+      } else if (step.name === '이상치탐지') {
+        outliers = step.func();
+      } else if (step.name === 'Slack알림' && outliers && outliers.length > 0) {
+        step.func(outliers);
+      } else if (step.name === '명세서발송') {
+        emailResult = step.func();
+      }
+      
+      SpreadsheetApp.flush();
+      Utilities.sleep(1000);
+    }
+    
+    refreshDashboard();
+    showWorkflowResult(calculationResult, outliers, emailResult);
+    
+  } catch (error) {
+    handleError('급여계산 워크플로우', error);
+  }
+}
+
+function executePayroll() {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const employeeSheet = ss.getSheetByName('직원정보');
+    const payrollSheet = ss.getSheetByName('급여계산');
+    
+    const lastRow = employeeSheet.getLastRow();
+    if (lastRow < 2) return { success: false, message: '직원정보가 없습니다.', count: 0 };
+    
+    const employeeData = employeeSheet.getRange(2, 1, lastRow - 1, 10).getValues();
+    const settings = getSettings();
+    const results = [];
+    
+    employeeData.forEach(row => {
+      const employee = parseEmployeeData(row);
+      if (!employee.사번 || !employee.이름) return;
+      
+      const payroll = calculatePayroll(employee, settings);
+      results.push(Object.values(payroll));
+    });
+    
+    // 결과 저장
+    payrollSheet.getRange(2, 1, payrollSheet.getMaxRows() - 1, 23).clearContent();
+    if (results.length > 0) {
+      payrollSheet.getRange(2, 1, results.length, 23).setValues(results);
+      payrollSheet.getRange(2, 6, results.length, 15).setNumberFormat('#,##0');
+      payrollSheet.getRange(2, 19, results.length, 1).setNumberFormat('0.00');
+    }
+    
+    applyConditionalFormatting();
+    return { success: true, message: '급여 계산 완료', count: results.length };
+    
+  } catch (error) {
+    Logger.log('급여계산 오류: ' + error.message);
+    return { success: false, message: error.message, count: 0 };
+  }
+}
+
+function parseEmployeeData(row) {
+  return {
+    사번: row[0],
+    이메일: row[1],
+    이름: row[2],
+    부서: row[3],
+    직급: row[4],
+    기본급: row[5],
+    입사일: row[6],
+    부양가족수: row[7],
+    계좌번호: row[8],
+    야근시간: row[9]
+  };
+}
+
+function calculatePayroll(employee, settings) {
+  // 일할계산
+  const prorata = calculateProrata(employee.입사일);
+  
+  // 급여 항목 계산
+  const 적용_기본급 = Math.round(employee.기본급 * prorata.비율);
+  const 적용_식대 = Math.round(settings.식대 * prorata.비율);
+  const 적용_교통비 = Math.round(settings.교통비 * prorata.비율);
+  const 야근수당 = employee.야근시간 * settings.야근수당_시간당;
+  const 세전급여 = 적용_기본급 + 적용_식대 + 적용_교통비 + 야근수당;
+  
+  // 공제 계산
+  const deductions = calculateDeductions(적용_기본급, employee.부양가족수, settings);
+  const 실수령액 = 세전급여 - deductions.총공제;
+  
+  // 전월 비교
+  const comparison = compareWithLastMonth(employee.이름, 실수령액, settings.최저실수령액_기준);
+  
+  return {
+    사번: employee.사번,
+    이메일: employee.이메일,
+    이름: employee.이름,
+    부서: employee.부서,
+    직급: employee.직급,
+    기본급: 적용_기본급,
+    식대: 적용_식대,
+    교통비: 적용_교통비,
+    야근수당: 야근수당,
+    세전급여: 세전급여,
+    ...deductions,
+    실수령액: 실수령액,
+    ...comparison,
+    처리일시: new Date(),
+    일할계산: prorata.메시지
+  };
+}
+
+function calculateDeductions(기본급, 부양가족수, settings) {
+  const 국민연금 = Math.round(기본급 * settings.국민연금_요율);
+  const 건강보험 = Math.round(기본급 * settings.건강보험_요율);
+  const 장기요양 = Math.round(건강보험 * settings.장기요양_요율);
+  const 고용보험 = Math.round(기본급 * settings.고용보험_요율);
+  const 소득세 = calculateIncomeTax(기본급, 부양가족수);
+  
+  return {
+    국민연금: 국민연금,
+    건강보험: 건강보험,
+    장기요양: 장기요양,
+    고용보험: 고용보험,
+    소득세: 소득세,
+    총공제: 국민연금 + 건강보험 + 장기요양 + 고용보험 + 소득세
+  };
+}
+
+function compareWithLastMonth(이름, 실수령액, 최저기준) {
+  const 전월데이터 = getLastMonthSalary(이름);
+  let 전월대비 = 0, 증감률 = 0, 상태 = '✅ 정상', 비고 = '-';
+  
+  if (전월데이터 && 전월데이터 > 0) {
+    전월대비 = 실수령액 - 전월데이터;
+    증감률 = parseFloat(((전월대비 / 전월데이터) * 100).toFixed(2));
+    
+    if (실수령액 < 전월데이터) {
+      const 감소율 = Math.abs(증감률);
+      if (감소율 > 8) {
+        상태 = '🚨 경고';
+        비고 = `전월보다 ${감소율.toFixed(2)}% 낮음`;
+      } else if (감소율 > 0) {
+        상태 = '⚠️ 주의';
+        비고 = `전월보다 ${감소율.toFixed(2)}% 낮음`;
+      }
+    }
+  }
+  
+  if (실수령액 < 최저기준) {
+    상태 = '🚨 경고';
+    비고 = `최저실수령액(${최저기준.toLocaleString()}원) 미달`;
+  }
+  
+  return { 전월대비, 증감률, 상태, 비고 };
+}
+
+function calculateProrata(입사일) {
+  if (!입사일 || !(입사일 instanceof Date)) {
+    return { 비율: 1.0, 메시지: '-' };
+  }
+  
+  const 오늘 = new Date();
+  const 입사년 = 입사일.getFullYear();
+  const 입사월 = 입사일.getMonth();
+  const 입사일자 = 입사일.getDate();
+  
+  if (입사년 === 오늘.getFullYear() && 입사월 === 오늘.getMonth()) {
+    const 말일 = new Date(오늘.getFullYear(), 오늘.getMonth() + 1, 0).getDate();
+    const 근무일수 = 말일 - 입사일자 + 1;
+    const 비율 = 근무일수 / 말일;
+    
+    return {
+      비율: 비율,
+      메시지: `${근무일수}일/${말일}일 (${입사일자}~${말일}일)`
+    };
+  }
+  
+  return { 비율: 1.0, 메시지: '-' };
+}
+
+function calculateIncomeTax(기본급, 부양가족수 = 1) {
+  const 공제금액 = 150000 * 부양가족수;
+  const 과세표준 = Math.max(0, 기본급 - 공제금액);
+  
+  if (과세표준 <= 1200000) return Math.round(과세표준 * 0.06);
+  if (과세표준 <= 4600000) return Math.round(72000 + (과세표준 - 1200000) * 0.15);
+  if (과세표준 <= 8800000) return Math.round(582000 + (과세표준 - 4600000) * 0.24);
+  return Math.round(1590000 + (과세표준 - 8800000) * 0.35);
+}
+
+function getSettings() {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('설정값');
+  const data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 2).getValues();
+  
+  const settings = {};
+  data.forEach(row => {
+    settings[row[0]] = row[1];
+  });
+  return settings;
+}
+
+function getSetting(key) {
+  const settings = getSettings();
+  return settings[key] || null;
+}
+
+function getLastMonthSalary(이름) {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('전월급여');
+  if (!sheet || sheet.getLastRow() < 2) return null;
+  
+  const data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 2).getValues();
+  const row = data.find(r => r[0] === 이름);
+  return row ? row[1] : null;
+}
+
+function saveLastMonthData() {
+  showToast('전월 데이터를 저장합니다...', '⏳ 실행 중', -1);
+  
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const payrollSheet = ss.getSheetByName('급여계산');
+    const lastMonthSheet = ss.getSheetByName('전월급여');
+    
+    const lastRow = payrollSheet.getLastRow();
+    if (lastRow < 2) throw new Error('급여계산 데이터가 없습니다.');
+    
+    const 이름 = payrollSheet.getRange(2, 3, lastRow - 1, 1).getValues();
+    const 실수령액 = payrollSheet.getRange(2, 17, lastRow - 1, 1).getValues();
+    
+    const saveData = 이름
+      .map((row, i) => row[0] ? [row[0], 실수령액[i][0], new Date()] : null)
+      .filter(row => row !== null);
+    
+    lastMonthSheet.getRange(2, 1, lastMonthSheet.getMaxRows() - 1, 3).clearContent();
+    if (saveData.length > 0) {
+      lastMonthSheet.getRange(2, 1, saveData.length, 3).setValues(saveData);
+      lastMonthSheet.getRange(2, 2, saveData.length, 1).setNumberFormat('#,##0');
+    }
+    
+    showToast(`${saveData.length}명의 전월 데이터가 저장되었습니다.`, '✅ 완료', 5);
+    Logger.log(`전월 데이터 저장 완료: ${saveData.length}건`);
+    
+  } catch (error) {
+    handleError('전월 데이터 저장', error);
+  }
+}
+
+function applyConditionalFormatting() {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('급여계산');
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return;
+  
+  const statusRange = sheet.getRange(2, 20, lastRow - 1, 1);
+  statusRange.clearFormat();
+  
+  const rules = [
+    { text: '경고', color: '#f4cccc' },
+    { text: '주의', color: '#fff2cc' },
+    { text: '정상', color: '#d9ead3' }
+  ].map(rule => 
+    SpreadsheetApp.newConditionalFormatRule()
+      .whenTextContains(rule.text)
+      .setBackground(rule.color)
+      .setRanges([statusRange])
+      .build()
+  );
+  
+  sheet.setConditionalFormatRules(rules);
+}
+
+// ==================== 3. 이상치 탐지 ====================
+function detectOutliers() {
+  try {
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('급여계산');
+    const lastRow = sheet.getLastRow();
+    if (lastRow < 2) return [];
+    
+    const data = sheet.getRange(2, 1, lastRow - 1, 21).getValues();
+    const outliers = data
+      .filter(row => row[19] && (row[19].includes('경고') || row[19].includes('주의')))
+      .map(row => ({
+        사번: row[0],
+        이름: row[2],
+        부서: row[3],
+        실수령액: row[16],
+        상태: row[19],
+        비고: row[20],
+        전월대비: row[17]
+      }));
+    
+    if (outliers.length > 0) logOutliers(outliers);
+    return outliers;
+    
+  } catch (error) {
+    Logger.log('이상치 탐지 오류: ' + error.message);
+    return [];
+  }
+}
+
+function logOutliers(outliers) {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('이상치로그');
+  const timestamp = new Date();
+  
+  const logs = outliers.map(o => [
+    timestamp, o.사번, o.이름, o.부서, o.실수령액, o.상태, o.비고, o.전월대비
+  ]);
+  
+  if (logs.length > 0) {
+    sheet.getRange(sheet.getLastRow() + 1, 1, logs.length, 8).setValues(logs);
+  }
+}
+
+function sendSlackNotification(outliers) {
+  if (!CONFIG.SLACK_WEBHOOK_URL || outliers.length === 0) return;
+  
+  let message = '🚨 *급여 이상치 탐지 알림*\n\n';
+  message += `총 ${outliers.length}건의 이상치가 발견되었습니다.\n\n`;
+  
+  outliers.forEach(o => {
+    message += `• *${o.이름}* (${o.부서}) - ${o.상태}\n`;
+    message += `  실수령액: ${o.실수령액.toLocaleString()}원\n`;
+    message += `  사유: ${o.비고}\n`;
+    message += `  전월대비: ${o.전월대비 >= 0 ? '+' : ''}${o.전월대비.toLocaleString()}원\n\n`;
+  });
+  
+  const options = {
+    method: 'post',
+    contentType: 'application/json',
+    payload: JSON.stringify({ text: message })
+  };
+  
+  try {
+    UrlFetchApp.fetch(CONFIG.SLACK_WEBHOOK_URL, options);
+    Logger.log('Slack 알림 전송 완료');
+  } catch (error) {
+    Logger.log('Slack 알림 전송 실패: ' + error.message);
+  }
+}
+
+// ==================== 4. 급여명세서 발송 ====================
+function sendPayslips() {
+  try {
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('급여계산');
+    const lastRow = sheet.getLastRow();
+    if (lastRow < 2) {
+      showToast('급여계산 데이터가 없습니다.', '❌ 오류', 5);
+      return { success: 0, failed: 0 };
+    }
+    
+    const data = sheet.getRange(2, 1, lastRow - 1, 23).getValues();
+    const 처리년월 = Utilities.formatDate(new Date(), 'Asia/Seoul', 'yyyy년 MM월');
+    
+    let successCount = 0, failedCount = 0;
+    
+    data.forEach(row => {
+      const result = sendPayslip(row, 처리년월);
+      if (result) successCount++;
+      else failedCount++;
+    });
+    
+    Logger.log(`급여명세서 발송 완료 - 성공: ${successCount}건, 실패: ${failedCount}건`);
+    return { success: successCount, failed: failedCount };
+    
+  } catch (error) {
+    handleError('급여명세서 발송', error);
+    return { success: 0, failed: 0 };
+  }
+}
+
+function sendPayslip(row, 처리년월) {
+  const [사번, 이메일, 이름, 부서, 직급, 기본급, 식대, 교통비, 야근수당,
+         세전급여, 국민연금, 건강보험, 장기요양, 고용보험, 소득세,
+         총공제, 실수령액, 전월대비, 증감률, 상태, 비고, 처리일시, 일할계산] = row;
+  
+  if (!이메일 || !이름) {
+    Logger.log(`[${이름}] 이메일 주소가 없어 발송 건너뜀`);
+    return false;
+  }
+  
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(이메일)) {
+    Logger.log(`[${이름}] 유효하지 않은 이메일: ${이메일}`);
+    return false;
+  }
+  
+  try {
+    const htmlBody = generatePayslipHTML({
+      처리년월, 사번, 이름, 부서, 직급, 기본급, 식대, 교통비, 야근수당,
+      세전급여, 국민연금, 건강보험, 장기요양, 고용보험, 소득세,
+      총공제, 실수령액, 전월대비, 증감률, 일할계산
+    });
+    
+    MailApp.sendEmail({
+      to: 이메일,
+      subject: `[급여명세서] ${처리년월} - ${이름}님`,
+      htmlBody: htmlBody
+    });
+    
+    Logger.log(`[${이름}] 급여명세서 발송 완료: ${이메일}`);
+    return true;
+    
+  } catch (error) {
+    Logger.log(`[${이름}] 급여명세서 발송 실패: ${error.message}`);
+    return false;
+  }
+}
+
+function generatePayslipHTML(data) {
+  return `
+    <html>
+      <head>
+        <style>
+          body { font-family: 'Malgun Gothic', sans-serif; line-height: 1.6; color: #333; }
+          .container { max-width: 800px; margin: 0 auto; padding: 20px; }
+          .header { background-color: #4285f4; color: white; padding: 20px; text-align: center; border-radius: 5px 5px 0 0; }
+          .content { background-color: #f9f9f9; padding: 20px; border: 1px solid #ddd; }
+          .section { margin-bottom: 20px; }
+          .section-title { font-size: 18px; font-weight: bold; color: #4285f4; margin-bottom: 10px; border-bottom: 2px solid #4285f4; padding-bottom: 5px; }
+          table { width: 100%; border-collapse: collapse; margin-top: 10px; background-color: white; }
+          th, td { padding: 12px; text-align: left; border: 1px solid #ddd; }
+          th { background-color: #f0f0f0; font-weight: bold; }
+          .amount { text-align: right; font-weight: bold; }
+          .total-row { background-color: #e3f2fd; font-weight: bold; font-size: 16px; }
+          .highlight { color: #d32f2f; }
+          .positive { color: #388e3c; }
+          .footer { text-align: center; padding: 20px; color: #777; font-size: 12px; }
+          .notice-box { background-color: #fff3cd; border: 1px solid #ffc107; border-radius: 5px; padding: 15px; margin-top: 20px; }
+          .notice-title { font-weight: bold; color: #856404; margin-bottom: 10px; }
+          .notice-list { margin: 0; padding-left: 20px; }
+          .notice-list li { margin: 5px 0; color: #856404; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>💰 급여명세서</h1>
+            <p>${data.처리년월}</p>
+          </div>
+          
+          <div class="content">
+            <div class="section">
+              <div class="section-title">📋 직원 정보</div>
+              <table>
+                <tr><th>사번</th><td>${data.사번}</td><th>이름</th><td>${data.이름}</td></tr>
+                <tr><th>부서</th><td>${data.부서}</td><th>직급</th><td>${data.직급}</td></tr>
+                ${data.일할계산 && data.일할계산 !== '-' ? `<tr><th colspan="2">일할계산</th><td colspan="2" class="highlight">${data.일할계산}</td></tr>` : ''}
+              </table>
+            </div>
+            
+            <div class="section">
+              <div class="section-title">💵 지급 내역</div>
+              <table>
+                <tr><th>항목</th><th class="amount">금액</th></tr>
+                <tr><td>기본급</td><td class="amount">${data.기본급.toLocaleString()}원</td></tr>
+                <tr><td>식대</td><td class="amount">${data.식대.toLocaleString()}원</td></tr>
+                <tr><td>교통비</td><td class="amount">${data.교통비.toLocaleString()}원</td></tr>
+                <tr><td>야근수당</td><td class="amount">${data.야근수당.toLocaleString()}원</td></tr>
+                <tr class="total-row"><td>세전급여</td><td class="amount">${data.세전급여.toLocaleString()}원</td></tr>
+              </table>
+            </div>
+            
+            <div class="section">
+              <div class="section-title">➖ 공제 내역</div>
+              <table>
+                <tr><th>항목</th><th class="amount">금액</th></tr>
+                <tr><td>국민연금</td><td class="amount">${data.국민연금.toLocaleString()}원</td></tr>
+                <tr><td>건강보험</td><td class="amount">${data.건강보험.toLocaleString()}원</td></tr>
+                <tr><td>장기요양</td><td class="amount">${data.장기요양.toLocaleString()}원</td></tr>
+                <tr><td>고용보험</td><td class="amount">${data.고용보험.toLocaleString()}원</td></tr>
+                <tr><td>소득세</td><td class="amount">${data.소득세.toLocaleString()}원</td></tr>
+                <tr class="total-row"><td>총공제</td><td class="amount">${data.총공제.toLocaleString()}원</td></tr>
+              </table>
+            </div>
+            
+            <div class="section">
+              <div class="section-title">✅ 실수령액</div>
+              <table>
+                <tr class="total-row">
+                  <td>실수령액</td>
+                  <td class="amount" style="font-size: 20px; color: #1976d2;">${data.실수령액.toLocaleString()}원</td>
+                </tr>
+                ${data.전월대비 !== 0 ? `
+                <tr>
+                  <td>전월 대비</td>
+                  <td class="amount ${data.전월대비 >= 0 ? 'positive' : 'highlight'}">
+                    ${data.전월대비 >= 0 ? '+' : ''}${data.전월대비.toLocaleString()}원 (${data.증감률 >= 0 ? '+' : ''}${data.증감률}%)
+                  </td>
+                </tr>` : ''}
+              </table>
+            </div>
+            
+            <div class="notice-box">
+              <div class="notice-title">📌 급여 항목 안내</div>
+              <ul class="notice-list">
+                <li><strong>식대:</strong> 비과세 한도 20만원</li>
+                <li><strong>교통비:</strong> 비과세 한도 20만원</li>
+                <li><strong>야근수당:</strong> 당월 야근시간 × 시급의 1.5배</li>
+              </ul>
+            </div>
+          </div>
+          
+          <div class="footer">
+            <p>본 급여명세서는 자동으로 발송되었습니다.</p>
+            <p>문의사항이 있으시면 인사팀(${CONFIG.HR_EMAIL})으로 연락해주세요.</p>
+            <p>발송일시: ${Utilities.formatDate(new Date(), 'Asia/Seoul', 'yyyy-MM-dd HH:mm:ss')}</p>
+          </div>
+        </div>
+      </body>
+    </html>
+  `;
+}
+
+// ==================== 5. 대시보드 & 트리거 ====================
+function refreshDashboard() {
+  try {
+    const dashboard = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('대시보드');
+    const tempCell = dashboard.getRange('A1');
+    const originalValue = tempCell.getValue();
+    tempCell.setValue('새로고침 중...');
+    SpreadsheetApp.flush();
+    tempCell.setValue(originalValue);
+    Logger.log('대시보드 새로고침 완료');
+  } catch (error) {
+    Logger.log('대시보드 새로고침 중 오류: ' + error.message);
+  }
+}
+
+function setupMonthlyTrigger() {
+  ScriptApp.getProjectTriggers()
+    .filter(t => t.getHandlerFunction() === 'executePayrollWorkflow')
+    .forEach(t => ScriptApp.deleteTrigger(t));
+  
+  ScriptApp.newTrigger('executePayrollWorkflow')
+    .timeBased()
+    .onMonthDay(25)
+    .atHour(9)
+    .create();
+  
+  showToast('매월 25일 오전 9시에 자동 급여계산이 설정되었습니다.', '✅ 트리거 설정 완료', 5);
+}
+
+// ==================== 유틸리티 함수 ====================
+function showToast(message, title, timeout) {
+  SpreadsheetApp.getActiveSpreadsheet().toast(message, title, timeout);
+}
+
+function handleError(context, error) {
+  const message = `${context} 중 오류가 발생했습니다: ${error.message}`;
+  showToast(message, '❌ 오류', 5);
+  Logger.log(`${context} 오류: ${error.message}\n${error.stack}`);
+}
+
+function showWorkflowResult(calculationResult, outliers, emailResult) {
+  let message = `✅ 급여계산 완료\n\n`;
+  message += `📊 처리 결과:\n`;
+  message += `• 총 직원: ${calculationResult.count}명\n`;
+  message += `• 급여명세서 발송: ${emailResult.success}건 성공, ${emailResult.failed}건 실패\n\n`;
+  
+  if (outliers && outliers.length > 0) {
+    const 경고 = outliers.filter(o => o.상태.includes('경고')).length;
+    const 주의 = outliers.filter(o => o.상태.includes('주의')).length;
+    message += `⚠️ 이상치 탐지:\n`;
+    message += `• 경고: ${경고}건\n`;
+    message += `• 주의: ${주의}건\n`;
+    message += `• Slack 알림이 전송되었습니다.\n\n`;
+  } else {
+    message += `✅ 이상치가 발견되지 않았습니다.\n\n`;
+  }
+  
+  message += `대시보드가 업데이트되었습니다.`;
+  showToast(message, '✅ 모든 작업 완료', 10);
+}
+
+function setSheetHeader(sheet, headers, color) {
+  const range = sheet.getRange(1, 1, 1, headers.length);
+  range.setValues([headers])
+    .setFontWeight('bold')
+    .setBackground(color)
+    .setFontColor('#ffffff');
+}
+
+function setNumberValidation(sheet, startRow, column, rowCount) {
+  sheet.getRange(startRow, column, rowCount, 1).setDataValidation(
+    SpreadsheetApp.newDataValidation()
+      .requireNumberGreaterThanOrEqualTo(0)
+      .setAllowInvalid(false)
+      .setHelpText('0 이상의 숫자를 입력하세요')
+      .build()
+  );
+}
