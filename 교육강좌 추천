@@ -1,0 +1,677 @@
+/**
+ * ========================================
+ * Gemini AI 기반 교육 추천 시스템 v3.9.6
+ * ========================================
+ *
+ * 주요 수정 사항 (v3.9.5 → v3.9.6):
+ * - 프롬프트 수정
+ * - gemma-3-12b로 수정
+ */
+// ========================================
+// 1. 설정 및 상수
+// ========================================
+const CONFIG = {
+  GEMINI_API_KEY: PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY'),
+  GEMINI_API_URL: 'https://generativelanguage.googleapis.com/v1beta/models/gemma-3-12b-it:generateContent',
+
+  MAX_RETRIES: 5,
+  BASE_DELAY: 1000,
+  CACHE_HOURS: 6,
+  BATCH_SIZE: 3,
+  PROCESS_DELAY: 5000,
+
+  SHEETS: {
+    EMPLOYEE: '직원정보',
+    TREND: '트렌드분석',
+    RESULT: '추천결과'
+  }
+};
+// ========================================
+// 2. 유틸리티 함수
+// ========================================
+const Utils = {
+  log(category, message, data = null) {
+    const timestamp = new Date().toISOString();
+    let logMessage = `[${timestamp}] [${category}] ${message}`;
+    if (data) {
+      try {
+        logMessage += '\n' + JSON.stringify(data, null, 2);
+      } catch (e) {
+        logMessage += '\n' + String(data);
+      }
+    }
+    console.log(logMessage);
+  },
+  sleep(ms) {
+    Utilities.sleep(ms);
+  },
+  isValidUrl(url) {
+    if (!url || typeof url !== 'string') return false;
+    const urlPattern = /^https?:\/\/.+/i;
+    if (!urlPattern.test(url)) return false;
+    const invalidPatterns = [
+      /javascript:/i,
+      /<script/i,
+      /void\(0\)/i
+    ];
+    return !invalidPatterns.some(pattern => pattern.test(url));
+  },
+  escapeHtml(text) {
+    if (!text) return '';
+    return text.toString()
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  },
+  extractJSON(text) {
+    if (!text) return null;
+   
+    let jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      try { return JSON.parse(jsonMatch[0]); } catch (e) {}
+    }
+   
+    jsonMatch = text.match(/```json\s*([\s\S]*?)\s*```/);
+    if (jsonMatch) {
+      try { return JSON.parse(jsonMatch[1]); } catch (e) {}
+    }
+   
+    jsonMatch = text.match(/```\s*([\s\S]*?)\s*```/);
+    if (jsonMatch) {
+      try { return JSON.parse(jsonMatch[1]); } catch (e) {}
+    }
+   
+    const firstBrace = text.indexOf('{');
+    const lastBrace = text.lastIndexOf('}');
+    if (firstBrace !== -1 && lastBrace !== -1 && firstBrace < lastBrace) {
+      try {
+        return JSON.parse(text.substring(firstBrace, lastBrace + 1));
+      } catch (e) {}
+    }
+   
+    return null;
+  }
+};
+// ========================================
+// 3. Gemini API 호출
+// ========================================
+function callGeminiAPI(prompt, retryCount = 0) {
+  const startTime = Date.now();
+ 
+  if (!prompt || typeof prompt !== 'string') {
+    Utils.log('API_ERROR', '❌ 유효하지 않은 프롬프트', {
+      promptType: typeof prompt,
+      promptValue: prompt
+    });
+    throw new Error(`유효하지 않은 프롬프트: ${typeof prompt}`);
+  }
+ 
+  if (prompt.trim().length === 0) {
+    Utils.log('API_ERROR', '❌ 빈 프롬프트');
+    throw new Error('빈 프롬프트는 전송할 수 없습니다.');
+  }
+ 
+  try {
+    Utils.log('API_CALL', `Gemini API 호출 시작 (시도 ${retryCount + 1}/${CONFIG.MAX_RETRIES})`, {
+      promptLength: prompt.length,
+      promptPreview: prompt.substring(0, 200)
+    });
+    const response = UrlFetchApp.fetch(
+      `${CONFIG.GEMINI_API_URL}?key=${CONFIG.GEMINI_API_KEY}`,
+      {
+        method: 'post',
+        contentType: 'application/json',
+        muteHttpExceptions: true,
+        payload: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: {
+            temperature: 0.7,
+            maxOutputTokens: 2048
+          }
+        })
+      }
+    );
+    const responseCode = response.getResponseCode();
+    const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+    if (responseCode === 429) {
+      Utils.log('API_ERROR', `HTTP 429: API 할당량 초과 (${duration}초 소요)`);
+      if (retryCount < CONFIG.MAX_RETRIES - 1) {
+        const waitTime = 60;
+        Utils.log('RETRY', `${waitTime}초 후 재시도 (${retryCount + 2}/${CONFIG.MAX_RETRIES})`);
+        Utils.sleep(waitTime * 1000);
+        return callGeminiAPI(prompt, retryCount + 1);
+      }
+      throw new Error('API 할당량 초과: 1시간 후 재시도하거나 API 키를 확인하세요.');
+    }
+    if (responseCode === 503) {
+      Utils.log('API_ERROR', `HTTP 503: 서버 과부하 (${duration}초 소요)`);
+      if (retryCount < CONFIG.MAX_RETRIES - 1) {
+        const delay = CONFIG.BASE_DELAY * Math.pow(2, retryCount);
+        Utils.log('RETRY', `${delay}ms 후 재시도 (${retryCount + 2}/${CONFIG.MAX_RETRIES})`);
+        Utils.sleep(delay);
+        return callGeminiAPI(prompt, retryCount + 1);
+      }
+      throw new Error('서버 과부하: 잠시 후 다시 시도하세요.');
+    }
+    if (responseCode !== 200) {
+      throw new Error(`API 오류 (HTTP ${responseCode}): ${response.getContentText()}`);
+    }
+    const result = JSON.parse(response.getContentText());
+    const content = result?.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!content) {
+      throw new Error('API 응답에 텍스트 콘텐츠가 없습니다.');
+    }
+    Utils.log('API_SUCCESS', `✅ 응답 수신 (${duration}초 소요)`, {
+      contentLength: content.length,
+      contentPreview: content.substring(0, 200)
+    });
+    return content;
+  } catch (error) {
+    Utils.log('API_ERROR', `❌ 실패: ${error.message}`, {
+      stack: error.stack,
+      retryCount: retryCount
+    });
+    if (retryCount < CONFIG.MAX_RETRIES - 1) {
+      const delay = CONFIG.BASE_DELAY * Math.pow(2, retryCount);
+      Utils.log('RETRY', `${delay}ms 후 재시도 (${retryCount + 2}/${CONFIG.MAX_RETRIES})`);
+      Utils.sleep(delay);
+      return callGeminiAPI(prompt, retryCount + 1);
+    }
+    throw error;
+  }
+}
+// ========================================
+// 4. 직원 데이터 파싱
+// ========================================
+function parseEmployees() {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.SHEETS.EMPLOYEE);
+  const data = sheet.getDataRange().getValues();
+ 
+  if (data.length < 2) {
+    Utils.log('PARSE', '❌ 시트에 데이터가 없습니다.');
+    return [];
+  }
+  const headers = data[0];
+  Utils.log('PARSE', '=== 헤더 확인 ===', { headers: headers });
+  const columnIndex = {
+    selected: headers.indexOf('선택'),
+    id: headers.indexOf('직원ID'),
+    name: headers.indexOf('이름'),
+    email: headers.indexOf('이메일'),
+    jobRole: headers.indexOf('직무'),
+    department: headers.indexOf('부서'),
+    careerYears: headers.indexOf('경력(년)'),
+    skills: headers.indexOf('주요 역량'),
+    goals: headers.indexOf('목표 역량'),
+    budget: headers.indexOf('예산(만원)'),
+    preference: headers.indexOf('선호 방식'),
+    status: headers.indexOf('상태')
+  };
+  Utils.log('PARSE', '=== 컬럼 인덱스 매핑 ===', columnIndex);
+  if (columnIndex.selected === -1) {
+    Utils.log('PARSE', '❌ "선택" 컬럼을 찾을 수 없습니다.');
+    throw new Error('시트에 "선택" 컬럼이 없습니다.');
+  }
+  if (columnIndex.jobRole === -1) {
+    Utils.log('PARSE', '❌ "직무" 컬럼을 찾을 수 없습니다.');
+    throw new Error('시트에 "직무" 컬럼이 없습니다.');
+  }
+  const employees = [];
+  Utils.log('PARSE', `=== 직원 데이터 파싱 시작 (총 ${data.length - 1}행) ===`);
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+   
+    if (row[columnIndex.selected] !== true) {
+      Utils.log('PARSE', `⏭️ 건너뜀: ${row[columnIndex.name] || '(이름 없음)'} - 선택되지 않음`);
+      continue;
+    }
+    const employee = {
+      id: row[columnIndex.id],
+      name: row[columnIndex.name],
+      email: row[columnIndex.email],
+      jobRole: row[columnIndex.jobRole],
+      department: row[columnIndex.department],
+      careerYears: row[columnIndex.careerYears],
+      skills: row[columnIndex.skills],
+      goals: row[columnIndex.goals],
+      budget: row[columnIndex.budget],
+      preference: row[columnIndex.preference],
+      status: row[columnIndex.status],
+      selected: row[columnIndex.selected]
+    };
+    if (!employee.name || !employee.email || !employee.jobRole) {
+      Utils.log('PARSE', `⚠️ 건너뜀: 행 ${i + 1} - 필수 정보 누락`, {
+        name: employee.name,
+        email: employee.email,
+        jobRole: employee.jobRole
+      });
+      continue;
+    }
+    employees.push(employee);
+   
+    Utils.log('PARSE', `✅ 직원 추가: ${employee.name} (${employee.department})`, {
+      id: employee.id,
+      jobRole: employee.jobRole,
+      rowIndex: i + 1
+    });
+  }
+  Utils.log('PARSE', `=== 파싱 완료: ${employees.length}명 선택됨 ===`);
+  return employees;
+}
+// ========================================
+// 5. 트렌드 분석 시트 헤더 보장
+// ========================================
+function ensureTrendSheetHeader() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(CONFIG.SHEETS.TREND);
+  
+  if (!sheet) {
+    sheet = ss.insertSheet(CONFIG.SHEETS.TREND);
+  }
+  
+  if (sheet.getLastRow() === 0) {
+    sheet.appendRow([
+      '분석일시',
+      '직원ID',
+      '이름',
+      '부서',
+      '직무',
+      '핵심 키워드',
+      '추천 학습 주제'
+    ]);
+    sheet.getRange('A1:G1').setFontWeight('bold').setBackground('#fbbc04').setFontColor('#ffffff');
+    Utils.log('TREND_SHEET', '✅ 트렌드분석 시트 헤더 생성 완료');
+  }
+}
+// ========================================
+// 6. 트렌드 분석
+// ========================================
+function analyzeTrend(employee) {
+  Utils.log('TREND_ANALYZE', `=== 트렌드 분석 시작: ${employee.name} ===`);
+  if (!employee || !employee.jobRole) {
+    Utils.log('TREND_ANALYZE', '❌ 유효하지 않은 직원 데이터');
+    throw new Error('직원 데이터가 유효하지 않습니다.');
+  }
+  const cache = CacheService.getScriptCache();
+  const cacheKey = `trend_${employee.jobRole}`;
+  const cached = cache.get(cacheKey);
+  if (cached) {
+    Utils.log('TREND_ANALYZE', `✅ 캐시 로드: ${employee.jobRole}`);
+    const trendData = JSON.parse(cached);
+    try {
+      saveTrend(employee, trendData);
+    } catch (e) {}
+    return trendData;
+  }
+  const prompt = `
+당신은 ${employee.jobRole} 분야의 최신 트렌드를 분석하는 전문가입니다.
+**분석 대상:**
+- 직무: ${employee.jobRole}
+- 부서: ${employee.department}
+- 경력: ${employee.careerYears}년
+- 주요 역량: ${employee.skills}
+- 목표 역량: ${employee.goals}
+**요청사항:**
+1. 2025-2026년 ${employee.jobRole} 분야의 핵심 트렌드 5가지를 분석하세요.
+2. 각 트렌드에 대한 관련 키워드를 제시하세요.
+3. 실무에 적용 가능한 학습 주제 3가지를 추천하세요.
+**출력 형식 (JSON):**
+{
+  "keywords": ["키워드1", "키워드2", "키워드3", "키워드4", "키워드5"],
+  "topics": ["주제1", "주제2", "주제3"]
+}
+반드시 유효한 JSON 형식으로만 응답하세요.
+`;
+  const response = callGeminiAPI(prompt);
+  const trendData = Utils.extractJSON(response);
+  if (!trendData || !trendData.keywords || !trendData.topics) {
+    Utils.log('TREND_ANALYZE', '❌ JSON 파싱 실패', { response: response });
+    throw new Error('트렌드 분석 결과를 파싱할 수 없습니다.');
+  }
+  cache.put(cacheKey, JSON.stringify(trendData), CONFIG.CACHE_HOURS * 3600);
+  try {
+    saveTrend(employee, trendData);
+  } catch (e) {}
+  return trendData;
+}
+// ========================================
+// 7. 과정 추천 (Gemini가 직접 실제 과정 + URL 추천)
+// ========================================
+function recommendCourses(employee, trendData) {
+  Utils.log('COURSE_RECOMMEND', `=== 과정 추천 시작: ${employee.name} ===`);
+  
+  const prompt = `
+당신은 최고의 교육 과정 큐레이터입니다. 
+**직원 정보:**
+- 이름: ${employee.name}
+- 직무: ${employee.jobRole}
+- 경력: ${employee.careerYears}년
+- 주요 역량: ${employee.skills}
+- 목표 역량: ${employee.goals}
+**트렌드 분석 결과:**
+- 핵심 키워드: ${trendData.keywords.join(', ')}
+- 추천 학습 주제: ${trendData.topics.join(', ')}
+
+**요청사항:**
+위 트렌드 키워드와 학습 주제를 가장 잘 반영하는 교육 과정 5개를 직접 찾아 추천해주세요.
+- 검색된 모든 강좌 중에 조회수/수강생 많고 평점 높은 과정 우선
+- 각 과정의 정확한 과정 페이지 URL을 반드시 포함
+
+**출력 형식 (JSON):**
+{
+  "courses": [
+    {
+      "site": "플랫폼명 (예: Udemy)",
+      "title": "정확한 과정명",
+      "url": "https://실제과정페이지URL",
+      "reason": "추천 이유 (트렌드/주제 일치도, 평점, 인기 등)"
+    },
+    {
+      "site": "플랫폼명",
+      "title": "정확한 과정명",
+      "url": "https://실제과정페이지URL",
+      "reason": "추천 이유"
+    },
+    {
+      "site": "플랫폼명",
+      "title": "정확한 과정명",
+      "url": "https://실제과정페이지URL",
+      "reason": "추천 이유"
+    }
+  ]
+}
+반드시 유효한 JSON 형식으로만 응답하고, URL은 유효성이 있는 페이지여야 합니다.
+`;
+  const response = callGeminiAPI(prompt);
+  const result = Utils.extractJSON(response);
+  
+  if (!result || !result.courses || result.courses.length === 0) {
+    Utils.log('COURSE_RECOMMEND', '❌ 추천 실패 - 빈 결과');
+    return { courses: [] };
+  }
+  
+  // URL 유효성 검사 (잘못된 URL은 빈 문자열로)
+  const validCourses = result.courses.map(course => ({
+    ...course,
+    url: Utils.isValidUrl(course.url) ? course.url : ''
+  }));
+  
+  Utils.log('COURSE_RECOMMEND', `✅ 과정 추천 완료: ${validCourses.length}개`);
+  return { courses: validCourses };
+}
+// ========================================
+// 8. YouTube 추천 (조회수 높은 영상 우선)
+// ========================================
+function recommendYouTube(employee, trendData) {
+  Utils.log('YOUTUBE_RECOMMEND', `=== YouTube 추천 시작: ${employee.name} ===`);
+  
+  const prompt = `
+당신은 최고의 교육 영상 큐레이터입니다. 아래 정보를 참고해서 YouTube 영상을 찾아 추천해야 합니다.
+**직원 정보:**
+- 직무: ${employee.jobRole}
+- 목표 역량: ${employee.goals}
+**트렌드 키워드:** ${trendData.keywords.join(', ')}
+**추천 학습 주제:** ${trendData.topics.join(', ')}
+
+**요청사항:**
+위 키워드와 주제, 목표 역량의 단어들과 연관있는 YouTube 영상 5개를 직접 찾아 추천해주세요.
+- 제목이나 설명에 트렌드 키워드나 목표 역량 관련 단어가 포함된 영상 우선
+- 조회수가 높고 좋아요와 댓글이 많은 영상 선택
+- 각 영상의 정확한 watch 페이지 URL을 반드시 포함
+
+**출력 형식 (JSON):**
+{
+  "videos": [
+    {
+      "title": "정확한 영상 제목",
+      "url": "https://www.youtube.com/watch?v=XXXXX",
+      "reason": "추천 이유 (키워드 포함, 조회수, 채널 신뢰도 등)"
+    },
+    ...
+  ]
+}
+반드시 유효한 JSON 형식으로만 응답하고, URL은 실제 존재하는 영상이어야 합니다.
+`;
+  const response = callGeminiAPI(prompt);
+  const result = Utils.extractJSON(response);
+  
+  if (!result || !result.videos || result.videos.length === 0) {
+    Utils.log('YOUTUBE_RECOMMEND', '❌ 추천 실패 - 빈 결과');
+    return [];
+  }
+  
+  // URL 유효성 검사
+  const validVideos = result.videos.map(video => ({
+    ...video,
+    url: Utils.isValidUrl(video.url) && video.url.includes('youtube.com/watch') ? video.url : ''
+  }));
+  
+  Utils.log('YOUTUBE_RECOMMEND', `✅ YouTube 추천 완료: ${validVideos.length}개`);
+  return validVideos;
+}
+// ========================================
+// 9. 트렌드 분석 저장
+// ========================================
+function saveTrend(employee, trendData) {
+  ensureTrendSheetHeader();
+  
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.SHEETS.TREND);
+  const timestamp = new Date();
+  
+  sheet.appendRow([
+    timestamp,
+    employee.id || '',
+    employee.name || '',
+    employee.department || '',
+    employee.jobRole || '',
+    trendData.keywords.join(', '),
+    trendData.topics.join('\n')
+  ]);
+  
+  Utils.log('TREND_SAVE', `✅ 저장 완료: ${employee.name}`);
+}
+// ========================================
+// 10. 이메일 발송
+// ========================================
+function sendEmail(employee, trendData, courses, youtubeVideos) {
+  Utils.log('EMAIL', `=== 이메일 발송 시작: ${employee.email} ===`);
+  
+  const coursesHtml = courses.map((course, index) => `
+    <div style="margin-bottom: 20px; padding: 15px; background: #f8f9fa; border-radius: 8px;">
+      <h3 style="color: #2c3e50; margin: 0 0 10px 0;">
+        ${index + 1}. ${Utils.escapeHtml(course.title)}
+      </h3>
+      <p style="margin: 5px 0; color: #7f8c8d;">
+        <strong>제공:</strong> ${Utils.escapeHtml(course.site)}
+      </p>
+      <p style="margin: 5px 0; color: #34495e;">
+        <strong>추천 이유:</strong> ${Utils.escapeHtml(course.reason)}
+      </p>
+      <p style="margin: 10px 0 0 0;">
+        ${course.url ? 
+          `<a href="${course.url}" style="display: inline-block; padding: 8px 16px; background: #3498db; color: white; text-decoration: none; border-radius: 4px;">
+            🎯 바로 수강하기
+          </a>` : 
+          '<span style="color: #95a5a6;">URL 확인 불가</span>'
+        }
+      </p>
+    </div>
+  `).join('');
+  
+  const youtubeHtml = youtubeVideos.map((video, index) => `
+    <div style="margin-bottom: 15px; padding: 15px; background: #fff3cd; border-radius: 8px;">
+      <h4 style="color: #856404; margin: 0 0 8px 0;">
+        ${index + 1}. ${Utils.escapeHtml(video.title)}
+      </h4>
+      <p style="margin: 5px 0; color: #856404;">
+        <strong>추천 이유:</strong> ${Utils.escapeHtml(video.reason)}
+      </p>
+      <p style="margin: 10px 0 0 0;">
+        ${video.url ? 
+          `<a href="${video.url}" style="display: inline-block; padding: 8px 16px; background: #ff0000; color: white; text-decoration: none; border-radius: 4px;">
+            ▶️ 바로 보기
+          </a>` : 
+          '<span style="color: #95a5a6;">URL 확인 불가</span>'
+        }
+      </p>
+    </div>
+  `).join('');
+  
+  const htmlBody = `
+    <div style="font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px;">
+      <h1 style="color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px;">
+        🎓 ${employee.name}님을 위한 맞춤 교육 추천
+      </h1>
+     
+      <div style="background: #e8f4f8; padding: 15px; border-radius: 8px; margin: 20px 0;">
+        <h2 style="color: #16a085; margin-top: 0;">📊 트렌드 분석 결과</h2>
+        <p><strong>핵심 키워드:</strong> ${trendData.keywords.join(', ')}</p>
+        <p><strong>추천 학습 주제:</strong></p>
+        <ul>
+          ${trendData.topics.map(topic => `<li>${Utils.escapeHtml(topic)}</li>`).join('')}
+        </ul>
+      </div>
+      
+      <h2 style="color: #16a085; margin-top: 30px;">💡 추천 교육 과정</h2>
+      ${coursesHtml || '<p>추천 과정이 없습니다.</p>'}
+      
+      <h2 style="color: #d68910; margin-top: 30px;">🎬 추천 YouTube 영상</h2>
+      ${youtubeHtml || '<p>추천 영상이 없습니다.</p>'}
+      
+      <div style="margin-top: 40px; padding: 15px; background: #ecf0f1; border-radius: 8px; text-align: center;">
+        <p style="color: #7f8c8d; margin: 0;">
+          본 추천은 Gemini AI가 ${new Date().toLocaleDateString('ko-KR')} 기준으로 생성했습니다.
+        </p>
+        <p style="color: #95a5a6; margin: 5px 0 0 0; font-size: 12px;">
+          ※ AI가 직접 선정한 실제 과정/영상 페이지로 연결됩니다.
+        </p>
+      </div>
+    </div>
+  `;
+  
+  try {
+    MailApp.sendEmail({
+      to: employee.email,
+      subject: `[교육 추천] ${employee.name}님을 위한 맞춤 학습 과정`,
+      htmlBody: htmlBody
+    });
+    Utils.log('EMAIL', `✅ 이메일 발송 완료: ${employee.email}`);
+    return true;
+  } catch (error) {
+    Utils.log('EMAIL', `❌ 이메일 발송 실패: ${error.message}`);
+    return false;
+  }
+}
+// ========================================
+// 11. 결과 저장
+// ========================================
+function saveResult(employee, trendData, courses, youtubeVideos) {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CONFIG.SHEETS.RESULT);
+  if (!sheet) return;
+  
+  const timestamp = new Date();
+  const courseTitles = courses.map(c => c.title).join('\n');
+  const courseUrls = courses.map(c => c.url).join('\n');
+  const youtubeTitles = youtubeVideos.map(v => v.title).join('\n');
+  const youtubeUrls = youtubeVideos.map(v => v.url).join('\n');
+  
+  sheet.appendRow([
+    timestamp,
+    employee.id,
+    employee.name,
+    employee.department,
+    employee.jobRole,
+    trendData.keywords.join(', '),
+    trendData.topics.join(', '),
+    courseTitles,
+    courseUrls,
+    youtubeTitles,
+    youtubeUrls
+  ]);
+}
+// ========================================
+// 12. 메인 처리 함수
+// ========================================
+function processEmployees() {
+  const startTime = Date.now();
+  Utils.log('PROCESS', '=== 교육 추천 프로세스 시작 ===');
+  try {
+    const employees = parseEmployees();
+    if (employees.length === 0) {
+      SpreadsheetApp.getUi().alert('처리할 직원을 선택해주세요 (A열 체크박스).');
+      return;
+    }
+    if (employees.length > CONFIG.BATCH_SIZE) {
+      SpreadsheetApp.getUi().alert(`한 번에 최대 ${CONFIG.BATCH_SIZE}명까지 처리 가능합니다.`);
+      return;
+    }
+    
+    let successCount = 0;
+    let failCount = 0;
+    
+    for (let i = 0; i < employees.length; i++) {
+      const employee = employees[i];
+      try {
+        const trendData = analyzeTrend(employee);
+        const { courses } = recommendCourses(employee, trendData);
+        const youtubeVideos = recommendYouTube(employee, trendData);
+        const emailSent = sendEmail(employee, trendData, courses, youtubeVideos);
+        if (emailSent) {
+          saveResult(employee, trendData, courses, youtubeVideos);
+          successCount++;
+        } else {
+          failCount++;
+        }
+      } catch (error) {
+        failCount++;
+        Utils.log('PROCESS', `❌ 처리 실패: ${employee.name}`, { error: error.message });
+      }
+      if (i < employees.length - 1) {
+        Utils.sleep(CONFIG.PROCESS_DELAY);
+      }
+    }
+    
+    const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+    const summary = `처리 완료\n총 시간: ${duration}초\n성공: ${successCount}명\n실패: ${failCount}명`;
+    SpreadsheetApp.getUi().alert(summary);
+  } catch (error) {
+    SpreadsheetApp.getUi().alert(`오류 발생: ${error.message}`);
+  }
+}
+// ========================================
+// 13. 메뉴 및 초기 설정
+// ========================================
+function onOpen() {
+  SpreadsheetApp.getUi()
+    .createMenu('🎓 교육 추천 시스템')
+    .addItem('▶️ 선택한 직원 처리', 'processEmployees')
+    .addSeparator()
+    .addItem('⚙️ API 키 설정', 'showApiKeyDialog')
+    .addItem('🗑️ 캐시 초기화', 'clearCache')
+    .addToUi();
+}
+function showApiKeyDialog() {
+  const ui = SpreadsheetApp.getUi();
+  const currentKey = PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY');
+  const message = currentKey
+    ? 'API 키가 이미 설정되어 있습니다.\n새로운 키를 입력하면 교체됩니다.'
+    : 'Gemini API 키를 입력하세요.\n(https://aistudio.google.com/apikey 에서 발급)';
+ 
+  const response = ui.prompt('API 키 설정', message, ui.ButtonSet.OK_CANCEL);
+ 
+  if (response.getSelectedButton() === ui.Button.OK) {
+    const apiKey = response.getResponseText().trim();
+    if (apiKey) {
+      PropertiesService.getScriptProperties().setProperty('GEMINI_API_KEY', apiKey);
+      ui.alert('✅ API 키가 저장되었습니다.');
+    } else {
+      ui.alert('❌ 유효한 API 키를 입력하세요.');
+    }
+  }
+}
+function clearCache() {
+  CacheService.getScriptCache().removeAll(['trend_']);
+  SpreadsheetApp.getUi().alert('✅ 캐시가 초기화되었습니다.');
+}
