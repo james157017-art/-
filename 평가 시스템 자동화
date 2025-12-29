@@ -1,0 +1,478 @@
+// ========================================
+// 평가 시스템 자동화 - 메인 코드
+// ========================================
+
+/**
+ * 고도화된 평가 폼 생성 함수
+ */
+function createAdvancedEvaluationForm() {
+  // 새 평가 폼 생성
+  var form = FormApp.create('2025년 상반기 직원 역량 평가');
+  
+  // 폼 설정
+  form.setDescription(
+    '본 평가는 구성원의 성장과 발전을 위해 진행됩니다.\n' +
+    '솔직하고 건설적인 피드백을 부탁드립니다.\n' +
+    '모든 응답은 익명으로 처리되며, 평가 결과는 개인 성장 계획 수립에 활용됩니다.'
+  );
+  form.setCollectEmail(true);
+  form.setLimitOneResponsePerUser(true);
+  form.setProgressBar(true);
+  form.setConfirmationMessage('평가에 참여해 주셔서 감사합니다! 소중한 의견은 조직 발전에 큰 도움이 됩니다.');
+  
+  // ===== 섹션 1: 기본 정보 =====
+  form.addSectionHeaderItem()
+    .setTitle('📋 기본 정보')
+    .setHelpText('평가 대상자에 대한 기본 정보를 입력해주세요.');
+  
+  form.addTextItem()
+    .setTitle('평가 대상자 이름')
+    .setRequired(true);
+  
+  form.addTextItem()
+    .setTitle('평가 대상자 부서')
+    .setRequired(true);
+  
+  form.addMultipleChoiceItem()
+    .setTitle('평가 대상자와의 관계')
+    .setChoiceValues(['상사', '동료', '부하직원', '타부서 협업자'])
+    .setRequired(true);
+  
+  // ===== 섹션 2: 업무 역량 평가 =====
+  form.addPageBreakItem()
+    .setTitle('💼 업무 역량 평가')
+    .setHelpText('각 항목에 대해 5점 척도로 평가해주세요.');
+  
+  var competencies = [
+    ['업무 전문성', '담당 업무에 대한 전문 지식과 기술 수준'],
+    ['문제 해결 능력', '업무 중 발생하는 문제를 효과적으로 해결하는 능력'],
+    ['업무 효율성', '주어진 시간 내에 업무를 완료하는 능력'],
+    ['품질 관리', '업무 결과물의 정확성과 완성도'],
+    ['창의성 및 혁신', '새로운 아이디어 제안과 업무 개선 노력']
+  ];
+  
+  competencies.forEach(function(item) {
+    form.addScaleItem()
+      .setTitle(item[0])
+      .setHelpText(item[1])
+      .setBounds(1, 5)
+      .setLabels('매우 미흡', '매우 우수')
+      .setRequired(true);
+  });
+  
+  // ===== 섹션 3: 협업 및 소통 역량 =====
+  form.addPageBreakItem()
+    .setTitle('🤝 협업 및 소통 역량')
+    .setHelpText('협업 및 의사소통 능력을 평가해주세요.');
+  
+  var collaboration = [
+    ['커뮤니케이션', '명확하고 효과적인 의사소통 능력'],
+    ['팀워크', '팀 목표 달성을 위한 협력과 기여도'],
+    ['갈등 관리', '의견 차이나 갈등 상황을 건설적으로 해결하는 능력'],
+    ['피드백 수용', '타인의 의견과 피드백을 긍정적으로 받아들이는 자세']
+  ];
+  
+  collaboration.forEach(function(item) {
+    form.addScaleItem()
+      .setTitle(item[0])
+      .setHelpText(item[1])
+      .setBounds(1, 5)
+      .setLabels('매우 미흡', '매우 우수')
+      .setRequired(true);
+  });
+  
+  // ===== 섹션 4: 리더십 및 태도 =====
+  form.addPageBreakItem()
+    .setTitle('🎯 리더십 및 태도')
+    .setHelpText('업무 태도 및 리더십을 평가해주세요.');
+  
+  var leadership = [
+    ['책임감', '맡은 업무에 대한 책임감과 완수 의지'],
+    ['자기 개발', '지속적인 학습과 성장을 위한 노력'],
+    ['조직 이해도', '조직의 비전과 목표에 대한 이해와 공감'],
+    ['솔선수범', '모범적인 행동으로 타인에게 긍정적 영향을 주는 정도']
+  ];
+  
+  leadership.forEach(function(item) {
+    form.addScaleItem()
+      .setTitle(item[0])
+      .setHelpText(item[1])
+      .setBounds(1, 5)
+      .setLabels('매우 미흡', '매우 우수')
+      .setRequired(true);
+  });
+  
+  // ===== 섹션 5: 종합 평가 및 피드백 =====
+  form.addPageBreakItem()
+    .setTitle('📝 종합 평가 및 피드백')
+    .setHelpText('전반적인 평가와 개선 제안을 작성해주세요.');
+  
+  form.addMultipleChoiceItem()
+    .setTitle('종합 평가')
+    .setChoiceValues([
+      '탁월함 (Top 10%)',
+      '우수함 (상위 20%)',
+      '기대 이상 (상위 40%)',
+      '기대 충족 (중위 30%)',
+      '개선 필요 (하위 10%)'
+    ])
+    .setRequired(true);
+  
+  form.addCheckboxItem()
+    .setTitle('특별히 우수한 강점 (복수 선택 가능)')
+    .setChoiceValues([
+      '전문 지식',
+      '리더십',
+      '커뮤니케이션',
+      '문제 해결',
+      '창의성',
+      '팀워크',
+      '책임감',
+      '학습 능력',
+      '실행력',
+      '전략적 사고'
+    ]);
+  
+  form.addParagraphTextItem()
+    .setTitle('주요 강점 및 성과')
+    .setHelpText('평가 대상자의 뛰어난 점이나 인상 깊었던 업무 성과를 구체적으로 작성해주세요.')
+    .setRequired(true);
+  
+  form.addParagraphTextItem()
+    .setTitle('개선 및 발전 제안')
+    .setHelpText('더 나은 성장을 위해 개선이 필요한 부분이나 개발이 필요한 역량을 건설적으로 제안해주세요.')
+    .setRequired(true);
+  
+  form.addParagraphTextItem()
+    .setTitle('추가 의견 (선택사항)')
+    .setHelpText('그 외 전달하고 싶은 의견이나 제안사항을 자유롭게 작성해주세요.')
+    .setRequired(false);
+  
+  // 폼 URL 가져오기
+  var formUrl = form.getPublishedUrl();
+  var formId = form.getId();
+  
+  // 스프레드시트에 저장
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+  sheet.getRange('H1').setValue('평가 폼 링크');
+  sheet.getRange('H2').setValue(formUrl);
+  sheet.getRange('I1').setValue('폼 ID');
+  sheet.getRange('I2').setValue(formId);
+  
+  Logger.log('고도화된 평가 폼 생성 완료: ' + formUrl);
+  return formUrl;
+}
+
+/**
+ * HTML 형식의 예쁜 이메일 자동 발송
+ */
+function sendBeautifulEmails() {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+  var data = sheet.getDataRange().getValues();
+  var formUrl = sheet.getRange('H2').getValue();
+  
+  // 폼 URL이 없으면 종료
+  if (!formUrl) {
+    SpreadsheetApp.getUi().alert('먼저 평가 폼을 생성해주세요!');
+    return;
+  }
+  
+  var successCount = 0;
+  var failCount = 0;
+  
+  // 2번째 행부터 데이터 처리 (1번째 행은 헤더)
+  for (var i = 1; i < data.length; i++) {
+    var name = data[i][0];          // A열: 이름
+    var email = data[i][1];         // B열: 이메일
+    var department = data[i][2];    // C열: 부서
+    var position = data[i][3];      // D열: 직급
+    var evalType = data[i][4];      // E열: 평가유형
+    var sendStatus = data[i][5];    // F열: 발송상태
+    
+    // 이미 발송완료된 경우 건너뛰기
+    if (sendStatus === '발송완료') {
+      continue;
+    }
+    
+    // 빈 이메일은 건너뛰기
+    if (!email || email.trim() === '') {
+      sheet.getRange(i + 1, 6).setValue('이메일 없음');
+      continue;
+    }
+    
+    try {
+      // 이메일 제목
+      var subject = '🔔 [' + evalType + '] 2025년 상반기 직원 역량 평가 참여 안내';
+      
+      // HTML 이메일 본문
+      var htmlBody = createEmailTemplate(name, department, position, evalType, formUrl);
+      
+      // 이메일 발송
+      MailApp.sendEmail({
+        to: email,
+        subject: subject,
+        htmlBody: htmlBody
+      });
+      
+      // 발송 완료 표시
+      sheet.getRange(i + 1, 6).setValue('발송완료');
+      sheet.getRange(i + 1, 6).setBackground('#d9ead3');
+      successCount++;
+      
+      // 서버 부하 방지 (0.5초 대기)
+      Utilities.sleep(500);
+      
+    } catch (e) {
+      // 에러 발생 시
+      sheet.getRange(i + 1, 6).setValue('발송실패');
+      sheet.getRange(i + 1, 6).setBackground('#f4cccc');
+      sheet.getRange(i + 1, 6).setNote(e.message);
+      failCount++;
+    }
+  }
+  
+  // 완료 메시지
+  var message = '이메일 발송 완료!\n\n' +
+                '✅ 성공: ' + successCount + '건\n' +
+                '❌ 실패: ' + failCount + '건';
+  SpreadsheetApp.getUi().alert(message);
+}
+
+/**
+ * HTML 이메일 템플릿 생성
+ */
+function createEmailTemplate(name, department, position, evalType, formUrl) {
+  var html = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="margin: 0; padding: 0; font-family: 'Malgun Gothic', '맑은 고딕', Arial, sans-serif; background-color: #f5f5f5;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f5f5f5; padding: 20px 0;">
+    <tr>
+      <td align="center">
+        <!-- 메인 컨테이너 -->
+        <table width="600" cellpadding="0" cellspacing="0" style="background-color: #ffffff; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); overflow: hidden;">
+          
+          <!-- 헤더 -->
+          <tr>
+            <td style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 40px 30px; text-align: center;">
+              <h1 style="color: #ffffff; margin: 0; font-size: 28px; font-weight: 700;">
+                📊 2025년 상반기 역량 평가
+              </h1>
+              <p style="color: #e8e8ff; margin: 10px 0 0 0; font-size: 14px;">
+                더 나은 성장을 위한 소중한 시간
+              </p>
+            </td>
+          </tr>
+          
+          <!-- 본문 -->
+          <tr>
+            <td style="padding: 40px 30px;">
+              
+              <!-- 인사말 -->
+              <p style="font-size: 16px; color: #333333; line-height: 1.6; margin: 0 0 20px 0;">
+                <strong style="color: #667eea; font-size: 18px;">${name}</strong>님, 안녕하세요! 👋
+              </p>
+              
+              <p style="font-size: 14px; color: #666666; line-height: 1.8; margin: 0 0 30px 0;">
+                ${department} ${position} ${name}님께 <strong style="color: #764ba2;">${evalType}</strong> 참여를 요청드립니다.<br>
+                평가는 구성원의 성장과 조직 발전을 위한 소중한 과정입니다.
+              </p>
+              
+              <!-- 안내 박스 -->
+              <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f8f9ff; border-left: 4px solid #667eea; border-radius: 8px; margin-bottom: 30px;">
+                <tr>
+                  <td style="padding: 20px;">
+                    <p style="margin: 0 0 12px 0; font-size: 14px; color: #333333;">
+                      <strong>📅 평가 기한</strong><br>
+                      <span style="color: #666666;">2025년 6월 30일 (금) 18:00까지</span>
+                    </p>
+                    <p style="margin: 0 0 12px 0; font-size: 14px; color: #333333;">
+                      <strong>⏱️ 소요 시간</strong><br>
+                      <span style="color: #666666;">약 10~15분</span>
+                    </p>
+                    <p style="margin: 0 0 12px 0; font-size: 14px; color: #333333;">
+                      <strong>🔒 익명 보장</strong><br>
+                      <span style="color: #666666;">모든 응답은 익명으로 처리됩니다</span>
+                    </p>
+                    <p style="margin: 0; font-size: 14px; color: #333333;">
+                      <strong>📱 접속 방법</strong><br>
+                      <span style="color: #666666;">PC, 태블릿, 모바일 모두 가능</span>
+                    </p>
+                  </td>
+                </tr>
+              </table>
+              
+              <!-- CTA 버튼 -->
+              <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom: 30px;">
+                <tr>
+                  <td align="center" style="padding: 20px 0;">
+                    <a href="${formUrl}" 
+                       style="display: inline-block; padding: 16px 50px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: #ffffff; text-decoration: none; border-radius: 30px; font-size: 16px; font-weight: 700; box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4); transition: all 0.3s;">
+                      ✍️ 평가 시작하기
+                    </a>
+                  </td>
+                </tr>
+              </table>
+              
+              <!-- 유의사항 -->
+              <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #fff9e6; border-radius: 8px; margin-bottom: 20px;">
+                <tr>
+                  <td style="padding: 20px;">
+                    <p style="margin: 0 0 10px 0; font-size: 14px; color: #856404; font-weight: 700;">
+                      💡 평가 작성 시 유의사항
+                    </p>
+                    <ul style="margin: 0; padding-left: 20px; color: #856404; font-size: 13px; line-height: 1.8;">
+                      <li>구체적인 사례를 바탕으로 객관적으로 평가해주세요</li>
+                      <li>건설적이고 발전적인 피드백을 제공해주세요</li>
+                      <li>익명이 보장되므로 솔직하게 작성해주세요</li>
+                      <li>중간 저장이 불가하니 한 번에 완료해주세요</li>
+                    </ul>
+                  </td>
+                </tr>
+              </table>
+              
+              <!-- 마무리 인사 -->
+              <p style="font-size: 14px; color: #666666; line-height: 1.6; margin: 0;">
+                여러분의 소중한 의견은 동료의 성장과<br>
+                더 나은 조직 문화를 만드는 데 큰 도움이 됩니다.<br>
+                진심으로 감사드립니다. 🙏
+              </p>
+              
+            </td>
+          </tr>
+          
+          <!-- 푸터 -->
+          <tr>
+            <td style="background-color: #f8f9fa; padding: 30px; text-align: center; border-top: 1px solid #e9ecef;">
+              <p style="margin: 0 0 10px 0; font-size: 13px; color: #666666;">
+                문의사항이 있으시면 언제든지 연락주세요
+              </p>
+              <p style="margin: 0 0 5px 0; font-size: 13px; color: #999999;">
+                📧 hr@company.com | ☎️ 02-1234-5678
+              </p>
+              <p style="margin: 15px 0 0 0; font-size: 12px; color: #aaaaaa;">
+                © 2025 Your Company. All rights reserved.
+              </p>
+            </td>
+          </tr>
+          
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+  `;
+  
+  return html;
+}
+
+/**
+ * 전체 자동화 실행
+ */
+function autoEvaluationSystem() {
+  var ui = SpreadsheetApp.getUi();
+  
+  // 확인 메시지
+  var response = ui.alert(
+    '평가 시스템 자동화',
+    '평가 폼 생성 및 이메일 발송을 시작하시겠습니까?\n\n' +
+    '1. 고도화된 평가 폼 생성\n' +
+    '2. HTML 이메일 자동 발송\n\n' +
+    '※ 이메일 발송 제한: 하루 100통 (무료 계정)',
+    ui.ButtonSet.YES_NO
+  );
+  
+  if (response == ui.Button.YES) {
+    // 1단계: 평가 폼 생성
+    ui.alert('1단계: 평가 폼을 생성하고 있습니다...');
+    var formUrl = createAdvancedEvaluationForm();
+    
+    // 2단계: 이메일 발송
+    ui.alert('2단계: 이메일을 발송하고 있습니다...\n잠시만 기다려주세요.');
+    Utilities.sleep(2000);
+    sendBeautifulEmails();
+    
+    ui.alert('✅ 모든 작업이 완료되었습니다!\n\n평가 폼: ' + formUrl);
+  }
+}
+
+/**
+ * 사이드바 메뉴에서 평가 폼만 생성
+ */
+function menuCreateForm() {
+  var formUrl = createAdvancedEvaluationForm();
+  SpreadsheetApp.getUi().alert('✅ 평가 폼이 생성되었습니다!\n\n' + formUrl);
+}
+
+/**
+ * 사이드바 메뉴에서 이메일만 발송
+ */
+function menuSendEmails() {
+  sendBeautifulEmails();
+}
+
+/**
+ * 사이드바 메뉴에서 전체 실행
+ */
+function menuRunAll() {
+  autoEvaluationSystem();
+}
+
+/**
+ * 스프레드시트 열 때 자동으로 사이드 메뉴 추가
+ */
+function onOpen() {
+  var ui = SpreadsheetApp.getUi();
+  ui.createMenu('📊 평가 자동화')
+    .addItem('🚀 전체 실행 (폼 생성 + 이메일 발송)', 'menuRunAll')
+    .addSeparator()
+    .addItem('📝 1단계: 평가 폼 생성', 'menuCreateForm')
+    .addItem('📧 2단계: 이메일 발송', 'menuSendEmails')
+    .addSeparator()
+    .addItem('ℹ️ 사용 가이드', 'showGuide')
+    .addToUi();
+}
+
+/**
+ * 사용 가이드 표시
+ */
+function showGuide() {
+  var html = `
+    <div style="font-family: Arial, sans-serif; padding: 20px; line-height: 1.6;">
+      <h2 style="color: #667eea;">📖 평가 자동화 시스템 사용 가이드</h2>
+      
+      <h3>🔧 사용 방법</h3>
+      <ol>
+        <li><strong>명단 작성:</strong> A~E열에 평가 대상자 정보 입력</li>
+        <li><strong>메뉴 선택:</strong> 상단 '📊 평가 자동화' 메뉴 클릭</li>
+        <li><strong>실행:</strong> '전체 실행' 또는 단계별 실행</li>
+      </ol>
+      
+      <h3>⚠️ 주의사항</h3>
+      <ul>
+        <li>무료 계정: 하루 100통 제한</li>
+        <li>Workspace 계정: 하루 1,500통</li>
+        <li>첫 실행 시 권한 승인 필요</li>
+        <li>테스트 후 실제 발송 권장</li>
+      </ul>
+      
+      <h3>📞 문의</h3>
+      <p>문제 발생 시 IT 지원팀으로 연락주세요.</p>
+      
+      <button onclick="google.script.host.close()" 
+              style="margin-top: 20px; padding: 10px 20px; background-color: #667eea; color: white; border: none; border-radius: 5px; cursor: pointer;">
+        닫기
+      </button>
+    </div>
+  `;
+  
+  var htmlOutput = HtmlService.createHtmlOutput(html)
+    .setWidth(400)
+    .setHeight(500);
+  SpreadsheetApp.getUi().showModalDialog(htmlOutput, '사용 가이드');
+}
